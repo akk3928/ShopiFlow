@@ -1,4 +1,4 @@
-```python
+
 from sqlalchemy.orm import Session
 
 from models.product import Product
@@ -144,5 +144,5 @@ class SalesService:
             .filter(SaleItem.sale_id == sale_id)
             .all()
         )
-```
+
 
