@@ -1,41 +1,108 @@
+
 import os
-import psycopg2
+
 from dotenv import load_dotenv
+from sqlalchemy import create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 # Load environment variables
 load_dotenv()
 
 
-class Database:
-    """PostgreSQL database connection manager for ShopiFlow."""
+# =========================================================
+# DATABASE CONFIGURATION
+# =========================================================
 
-    def __init__(self):
-        self.host = os.getenv("DB_HOST", "localhost")
-        self.port = os.getenv("DB_PORT", "5432")
-        self.database = os.getenv("DB_NAME", "shopiflow")
-        self.user = os.getenv("DB_USER", "postgres")
-        self.password = os.getenv("DB_PASSWORD")
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = os.getenv("DB_PORT", "5432")
+DB_NAME = os.getenv("DB_NAME", "shopiflow")
+DB_USER = os.getenv("DB_USER", "postgres")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 
-    def connect(self):
-        """Create and return a PostgreSQL database connection."""
-        try:
-            connection = psycopg2.connect(
-                host=self.host,
-                port=self.port,
-                database=self.database,
-                user=self.user,
-                password=self.password
-            )
 
-            print("Successfully connected to ShopiFlow database.")
-            return connection
+# PostgreSQL connection URL
+DATABASE_URL = (
+    f"postgresql+psycopg2://"
+    f"{DB_USER}:{DB_PASSWORD}@"
+    f"{DB_HOST}:{DB_PORT}/{DB_NAME}"
+)
 
-        except psycopg2.Error as error:
-            print(f"Database connection failed: {error}")
-            return None
 
-    def close(self, connection):
-        """Close the database connection."""
-        if connection:
-            connection.close()
-            print("Database connection closed.")
+# =========================================================
+# SQLALCHEMY
+# =========================================================
+
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True
+)
+
+
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine
+)
+
+
+Base = declarative_base()
+
+
+# =========================================================
+# DATABASE SESSION
+# =========================================================
+
+def get_db():
+    """
+    Provide a database session.
+
+    The session is automatically closed
+    after use.
+    """
+
+    db = SessionLocal()
+
+    try:
+        yield db
+
+    finally:
+        db.close()
+
+
+# =========================================================
+# DATABASE INITIALIZATION
+# =========================================================
+
+def init_db():
+    """
+    Create all database tables defined
+    by the SQLAlchemy models.
+    """
+
+    # Import models before creating tables
+    from models.product import Product
+    from models.customer import Customer
+    from models.sales import Sale, SaleItem
+    from models.inventory import Inventory
+
+    Base.metadata.create_all(bind=engine)
+
+
+# =========================================================
+# DATABASE CONNECTION TEST
+# =========================================================
+
+def test_connection():
+    """
+    Test the PostgreSQL database connection.
+    """
+
+    try:
+        with engine.connect() as connection:
+            print("Successfully connected to ShopiFlow PostgreSQL database.")
+            return True
+
+    except Exception as error:
+        print(f"Database connection failed: {error}")
+        return False
+
