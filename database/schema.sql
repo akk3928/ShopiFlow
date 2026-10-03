@@ -1,4 +1,4 @@
-```sql
+
 -- =========================================================
 -- ShopiFlow Database Schema
 -- AI/ML Business Intelligence & Retail Management System
@@ -157,4 +157,3 @@ FROM products
 WHERE sku IN ('SKU001', 'SKU002', 'SKU003', 'SKU004', 'SKU005')
 ON CONFLICT (product_id) DO NOTHING;
 
-```
