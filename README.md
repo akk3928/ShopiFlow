@@ -22,7 +22,6 @@ The system is designed around the following workflow:
                  └──────────┬──────────┘
                             │
         ┌───────────────────┼───────────────────┐
-        │                   │                   │
         ▼                   ▼                   ▼
    POS & Billing      Product Management   Inventory
         │                   │                   │
@@ -39,6 +38,7 @@ The system is designed around the following workflow:
               └─────────────┬─────────────┘
                             ▼
                     Business Insights
+
 ✨ Key Features
 🧾 Point of Sale (POS)
 
