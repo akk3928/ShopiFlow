@@ -1,0 +1,15 @@
+streamlit
+fastapi
+uvicorn
+sqlalchemy
+psycopg2-binary
+pydantic
+pydantic-settings
+python-dotenv
+python-jose[cryptography]
+passlib[bcrypt]
+plotly
+pandas
+numpy
+scikit-learn
+httpx
