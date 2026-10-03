@@ -395,7 +395,8 @@ ShopiFlow/
 │
 └── assets/
     └── screenshots/        # Project screenshots
-🎯 Project Objectives
+
+Project Objectives
 
 The main objectives of ShopiFlow are to:
 
@@ -427,11 +428,13 @@ Automated reports
 Multi-store management
 Advanced predictive analytics
 Mobile-friendly interface
-📸 Screenshots
+
+Screenshots
 
 Screenshots of the application will be added here as development progresses.
 
 Example:
+
 
 assets/
 └── screenshots/
@@ -440,7 +443,8 @@ assets/
     ├── inventory.png
     ├── products.png
     └── analytics.png
-📚 Academic Project
+      
+Academic Project
 
 Project: ShopiFlow
 Project Type: AI/ML & Business Intelligence Retail Management System
@@ -458,13 +462,14 @@ Machine Learning
 Business Intelligence
 Software Development
 System Design
-👨‍💻 Development
+
+Development
 
 ShopiFlow is developed as an academic project with the goal of combining software engineering, data science, artificial intelligence, and business management concepts into a practical retail application.
 
 The system is being developed incrementally, beginning with the core retail management functions and expanding toward AI/ML-based analytics and decision support.
 
-📄 License
+License
 
 This project is intended primarily for academic and educational purposes.
 
