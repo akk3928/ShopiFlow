@@ -1,4 +1,4 @@
-```python
+
 import os
 import joblib
 import pandas as pd
@@ -128,5 +128,5 @@ class SalesPredictionModel:
         self.model = joblib.load(self.model_path)
 
         return self.model
-```
+
 
