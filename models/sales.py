@@ -1,4 +1,4 @@
-```python
+
 from sqlalchemy import Column, Integer, Numeric, String, DateTime, ForeignKey
 from sqlalchemy.sql import func
 
@@ -42,5 +42,5 @@ class SaleItem(Base):
 
     def __repr__(self):
         return f"<SaleItem(sale_item_id={self.sale_item_id}, quantity={self.quantity})>"
-```
+
 
