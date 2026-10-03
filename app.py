@@ -1,4 +1,4 @@
-```python
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -275,4 +275,4 @@ st.divider()
 st.caption(
     "ShopiFlow | AI/ML Business Intelligence & Retail Management System"
 )
-```
+
