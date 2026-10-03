@@ -1,4 +1,4 @@
-```python
+
 from sqlalchemy.orm import Session
 
 from models.inventory import Inventory
@@ -122,5 +122,5 @@ class InventoryService:
         )
 
         return inventory
-```
+
 
