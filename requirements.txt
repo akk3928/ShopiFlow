@@ -12,4 +12,5 @@ plotly
 pandas
 numpy
 scikit-learn
+joblib
 httpx
