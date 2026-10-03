@@ -1,4 +1,4 @@
-```python
+
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -146,5 +146,4 @@ class AnalyticsService:
             "total_inventory": AnalyticsService.get_total_inventory(db),
             "low_stock": AnalyticsService.get_low_stock_count(db)
         }
-```
 
