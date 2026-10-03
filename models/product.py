@@ -1,4 +1,4 @@
-```python
+
 from sqlalchemy import Column, Integer, String, Numeric, Boolean, DateTime
 from sqlalchemy.sql import func
 
@@ -20,5 +20,5 @@ class Product(Base):
 
     def __repr__(self):
         return f"<Product(product_id={self.product_id}, name='{self.product_name}')>"
-```
+
 
