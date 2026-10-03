@@ -1,4 +1,4 @@
-```python
+
 from sqlalchemy.orm import Session
 
 from models.product import Product
@@ -94,5 +94,5 @@ class ProductService:
         db.commit()
 
         return product
-```
+
 
