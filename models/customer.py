@@ -1,4 +1,4 @@
-```python
+
 from sqlalchemy import Column, Integer, String, DateTime
 from sqlalchemy.sql import func
 
@@ -17,5 +17,5 @@ class Customer(Base):
 
     def __repr__(self):
         return f"<Customer(customer_id={self.customer_id}, name='{self.customer_name}')>"
-```
+
 
