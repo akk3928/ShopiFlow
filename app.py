@@ -1285,11 +1285,3 @@ finally:
     if db is not None:
         db.close()
 
-
-path = Path("/mnt/data/shopiflow_app_updated.py")
-path.write_text(code, encoding="utf-8")
-
-# Syntax-check the generated source before providing it.
-compile(code, str(path), "exec")
-
-print(f"Created and syntax-checked: {path}")
