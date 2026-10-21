@@ -1,6 +1,5 @@
 from pathlib import Path
 
-code = r 
 import io
 from datetime import date, datetime, timedelta
 
