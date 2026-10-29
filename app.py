@@ -728,6 +728,166 @@ try:
             st.stop()
         st.title("Data import")
         st.write("Import CSV files. Product prices and historical sales are stored in INR.")
+        st.caption("Import your own CSV files or real historical retail transactions from the UCI Online Retail dataset. Imported history does not reduce current stock.")
+
+        # Real-world UCI Online Retail dataset importer. Expected raw columns:
+        # InvoiceNo, StockCode, Description, Quantity, InvoiceDate, UnitPrice, CustomerID, Country.
+        with st.expander("Real-world dataset: UCI Online Retail", expanded=True):
+            st.write("Download the original dataset from the UCI Machine Learning Repository, convert it to CSV, then upload it here. The importer maps invoice numbers to orders and stock codes to products. Cancelled invoices and non-positive quantity/price rows are excluded. Source prices are in GBP; choose a conversion rate for storage in ShopiFlow's INR-based database.")
+            st.markdown("[Download the official UCI Online Retail dataset](https://archive.ics.uci.edu/dataset/352/online+retail)")
+            uci_file = st.file_uploader("Upload UCI Online Retail CSV", type=["csv"], key="uci_online_retail_csv")
+            uci_rate = st.number_input(
+                "GBP to INR conversion rate for this import", min_value=0.01, max_value=10000.0,
+                value=110.0, step=1.0, help="This is an editable conversion assumption, not a live or historical exchange rate. Use the rate appropriate for your analysis."
+            )
+            uci_limit = st.selectbox("Maximum source rows to process", [1000, 5000, 10000, 25000, 50000, 100000, 250000, 541909], index=3, key="uci_row_limit")
+            if uci_file is not None:
+                try:
+                    uci_df = pd.read_csv(uci_file, low_memory=False)
+                    uci_df.columns = [str(c).strip() for c in uci_df.columns]
+                    st.caption(f"File loaded: {len(uci_df):,} rows. Previewing the first 10 rows.")
+                    st.dataframe(uci_df.head(10), use_container_width=True, hide_index=True)
+                    uci_required = {"InvoiceNo", "StockCode", "Description", "Quantity", "InvoiceDate", "UnitPrice"}
+                    if not uci_required.issubset(set(uci_df.columns)):
+                        st.error("This does not look like the original UCI Online Retail CSV. Required columns: " + ", ".join(sorted(uci_required)))
+                    else:
+                        st.warning("Imported historical sales will use the selected GBP→INR multiplier. Existing invoices from this dataset are skipped on repeat imports. New product records are created with zero stock; historical imports never change current inventory.")
+                        if st.button("Import UCI historical retail data", type="primary", key="import_uci_online_retail"):
+                            source_rows = uci_df.head(int(uci_limit)).copy()
+                            source_rows["InvoiceNo"] = source_rows["InvoiceNo"].astype(str).str.strip()
+                            source_rows["StockCode"] = source_rows["StockCode"].astype(str).str.strip()
+                            source_rows["Description"] = source_rows["Description"].fillna("Unknown product").astype(str).str.strip()
+                            source_rows["Quantity"] = pd.to_numeric(source_rows["Quantity"], errors="coerce")
+                            source_rows["UnitPrice"] = pd.to_numeric(source_rows["UnitPrice"], errors="coerce")
+                            source_rows["InvoiceDate"] = pd.to_datetime(source_rows["InvoiceDate"], errors="coerce", dayfirst=True)
+                            cancelled_mask = source_rows["InvoiceNo"].str.upper().str.startswith("C")
+                            valid_mask = (
+                                source_rows["InvoiceNo"].ne("") & source_rows["StockCode"].ne("") &
+                                source_rows["Quantity"].notna() & source_rows["UnitPrice"].notna() &
+                                source_rows["InvoiceDate"].notna() & (source_rows["Quantity"] > 0) &
+                                (source_rows["UnitPrice"] > 0) & ~cancelled_mask
+                            )
+                            excluded_rows = int((~valid_mask).sum())
+                            clean_df = source_rows.loc[valid_mask].copy()
+                            if clean_df.empty:
+                                st.error("No valid sales rows remain after excluding cancellations, returns, and invalid values.")
+                            else:
+                                try:
+                                    # Persistent invoice registry makes repeated uploads idempotent.
+                                    db.execute(text("""
+                                        CREATE TABLE IF NOT EXISTS shopiflow_imported_invoices (
+                                            source_key VARCHAR(80) NOT NULL,
+                                            external_invoice_id VARCHAR(120) NOT NULL,
+                                            sale_id BIGINT,
+                                            imported_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                                            PRIMARY KEY (source_key, external_invoice_id)
+                                        )
+                                    """))
+                                    db.commit()
+                                except Exception as table_exc:
+                                    db.rollback()
+                                    st.error("Could not prepare the import tracking table. Check that the database user can create tables. Details: " + str(table_exc))
+                                    st.stop()
+
+                                # Create any missing products first. The source has no stock-on-hand or cost data,
+                                # so new products are added with zero stock and zero cost rather than inventing values.
+                                product_by_sku = {}
+                                product_errors = []
+                                distinct_products = clean_df[["StockCode", "Description", "UnitPrice"]].copy()
+                                distinct_products = distinct_products.groupby("StockCode", as_index=False).agg(
+                                    Description=("Description", "first"), UnitPrice=("UnitPrice", "median")
+                                )
+                                for _, prow in distinct_products.iterrows():
+                                    sku = str(prow["StockCode"]).strip()[:50]
+                                    if not sku:
+                                        continue
+                                    try:
+                                        existing_product = db.query(Product).filter(Product.sku == sku).first()
+                                        if existing_product:
+                                            product_by_sku[sku] = existing_product
+                                        else:
+                                            pname = (str(prow["Description"]).strip() or f"UCI product {sku}")[:255]
+                                            new_product = ProductService.create_product(
+                                                db, pname, "Imported Retail", sku,
+                                                max(0.0, float(prow["UnitPrice"]) * float(uci_rate)), 0.0, "UCI Online Retail"
+                                            )
+                                            product_by_sku[sku] = new_product
+                                            db.add(Inventory(product_id=new_product.product_id, quantity=0,
+                                                reorder_level=0, reorder_quantity=1))
+                                            db.commit()
+                                    except Exception as product_exc:
+                                        db.rollback()
+                                        product_errors.append(f"SKU {sku}: {product_exc}")
+                                imported_orders = 0
+                                skipped_existing = 0
+                                failed_orders = []
+                                grouped_orders = clean_df.groupby("InvoiceNo", sort=False)
+                                total_groups = int(clean_df["InvoiceNo"].nunique())
+                                progress = st.progress(0.0, text="Importing historical invoices...")
+                                batch_count = 0
+                                for group_index, (invoice_no, group) in enumerate(grouped_orders, start=1):
+                                    invoice_no = str(invoice_no).strip()[:120]
+                                    try:
+                                        # Keep each invoice inside a savepoint so one invalid invoice
+                                        # does not discard other invoices in the current batch.
+                                        with db.begin_nested():
+                                            already = db.execute(text("""
+                                                SELECT 1 FROM shopiflow_imported_invoices
+                                                WHERE source_key = :source AND external_invoice_id = :invoice
+                                            """), {"source": "uci_online_retail", "invoice": invoice_no}).first()
+                                            if already:
+                                                skipped_existing += 1
+                                            else:
+                                                line_items = []
+                                                total_inr = 0.0
+                                                invoice_date = pd.to_datetime(group["InvoiceDate"].iloc[0]).to_pydatetime()
+                                                for _, r in group.iterrows():
+                                                    sku = str(r["StockCode"]).strip()[:50]
+                                                    product = product_by_sku.get(sku)
+                                                    if product is None:
+                                                        raise ValueError(f"Product SKU could not be created/found: {sku}")
+                                                    qty = int(r["Quantity"])
+                                                    unit_inr = float(r["UnitPrice"]) * float(uci_rate)
+                                                    subtotal_inr = unit_inr * qty
+                                                    line_items.append((product, qty, unit_inr, subtotal_inr))
+                                                    total_inr += subtotal_inr
+                                                sale = Sale(customer_id=None, total_amount=total_inr,
+                                                    payment_method="Imported UCI", sale_date=invoice_date)
+                                                db.add(sale)
+                                                db.flush()
+                                                for product, qty, unit_inr, subtotal_inr in line_items:
+                                                    db.add(SaleItem(sale_id=sale.sale_id, product_id=product.product_id,
+                                                        quantity=qty, unit_price=unit_inr, subtotal=subtotal_inr))
+                                                db.execute(text("""
+                                                    INSERT INTO shopiflow_imported_invoices
+                                                        (source_key, external_invoice_id, sale_id)
+                                                    VALUES (:source, :invoice, :sale_id)
+                                                    ON CONFLICT (source_key, external_invoice_id) DO NOTHING
+                                                """), {"source": "uci_online_retail", "invoice": invoice_no, "sale_id": int(sale.sale_id)})
+                                                imported_orders += 1
+                                                batch_count += 1
+                                        if batch_count >= 100:
+                                            db.commit()
+                                            batch_count = 0
+                                    except Exception as invoice_exc:
+                                        failed_orders.append(f"Invoice {invoice_no}: {invoice_exc}")
+                                    if group_index % 25 == 0 or group_index == len(grouped_orders):
+                                        progress.progress(group_index / max(1, len(grouped_orders)),
+                                            text=f"Processed {group_index:,} of {len(grouped_orders):,} invoices...")
+                                db.commit()
+                                progress.empty()
+                                st.success(f"UCI import finished. Imported {imported_orders:,} invoice(s); skipped {skipped_existing:,} previously imported invoice(s); excluded {excluded_rows:,} invalid/cancelled/return row(s).")
+                                if product_errors:
+                                    st.warning("Some products could not be prepared:\n" + "\n".join(product_errors[:10]))
+                                if failed_orders:
+                                    st.warning("Some invoices were skipped:\n" + "\n".join(failed_orders[:15]))
+                                st.info("Source customer IDs/countries are not linked to your existing customer table. Original UCI sales prices were multiplied by the selected GBP→INR rate. Current inventory was not deducted.")
+                                st.rerun()
+                except Exception as exc:
+                    st.error(f"Could not read UCI CSV: {exc}")
+
+        st.divider()
+        st.subheader("ShopiFlow-format CSV imports")
         with st.expander("Product CSV format", expanded=True):
             st.code("product_name,category,sku,price,cost_price,supplier,quantity,reorder_level,reorder_quantity\nTea,Groceries,TEA001,120,85,ABC Supplier,40,10,30", language="csv")
         product_file = st.file_uploader("Upload product CSV", type=["csv"], key="product_csv")
