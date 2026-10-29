@@ -1,9 +1,4 @@
 from datetime import date, datetime, timedelta
-from email.message import EmailMessage
-from html import escape
-import os
-import smtplib
-import ssl
 
 import pandas as pd
 import plotly.express as px
@@ -272,74 +267,6 @@ def show_sales_charts(db):
                 title=f"Revenue Mix ({CURRENCY_CODE})", hole=.45), use_container_width=True)
 
 
-def get_email_settings():
-    """Read SMTP credentials from Streamlit Secrets or environment variables."""
-    settings = {}
-    try:
-        settings = dict(st.secrets.get("email", {}))
-    except Exception:
-        settings = {}
-    return {
-        "smtp_server": settings.get("smtp_server") or os.getenv("SMTP_SERVER", "smtp.gmail.com"),
-        "smtp_port": int(settings.get("smtp_port") or os.getenv("SMTP_PORT", "587")),
-        "sender_email": settings.get("sender_email") or os.getenv("SMTP_USER", "shopiflow.rgu@gmail.com"),
-        "app_password": settings.get("app_password") or os.getenv("SMTP_PASSWORD", ""),
-    }
-
-
-def send_invoice_email(to_email, order):
-    """Send a self-contained HTML receipt through the configured Gmail SMTP account."""
-    cfg = get_email_settings()
-    if not cfg["app_password"]:
-        raise RuntimeError(
-            "Email is not configured yet. Add the Gmail app password in Streamlit Cloud → Settings → Secrets."
-        )
-    if not to_email or "@" not in to_email or "." not in to_email.rsplit("@", 1)[-1]:
-        raise ValueError("Enter a valid customer email address.")
-
-    rows_html = "".join(
-        "<tr>"
-        f"<td style='padding:10px;border-bottom:1px solid #e5e7eb'>{escape(str(item['product_name']))}<br><small>SKU: {escape(str(item['sku']))}</small></td>"
-        f"<td style='padding:10px;text-align:center;border-bottom:1px solid #e5e7eb'>{int(item['quantity'])}</td>"
-        f"<td style='padding:10px;text-align:right;border-bottom:1px solid #e5e7eb'>{escape(order['currency_symbol'])}{float(item['unit_price_display']):,.2f}</td>"
-        f"<td style='padding:10px;text-align:right;border-bottom:1px solid #e5e7eb'>{escape(order['currency_symbol'])}{float(item['line_total_display']):,.2f}</td>"
-        "</tr>" for item in order["items"]
-    )
-    total = f"{order['currency_symbol']}{float(order['total_display']):,.2f}"
-    order_id = escape(str(order['order_id']))
-    customer = escape(str(order.get('customer_name') or 'Walk-in Customer'))
-    sale_date = escape(str(order.get('sale_date') or datetime.now().strftime('%Y-%m-%d %H:%M')))
-    payment = escape(str(order.get('payment_method') or ''))
-    html_body = f"""<!doctype html><html><body style='font-family:Arial,sans-serif;color:#202b3c;max-width:760px;margin:auto;padding:24px'>
-      <div style='background:#173b70;color:#fff;padding:22px;border-radius:12px 12px 0 0'><h1 style='margin:0;letter-spacing:2px'>SHOPIFLOW</h1><p style='margin:6px 0 0'>Retail purchase invoice</p></div>
-      <div style='border:1px solid #e5e7eb;padding:22px;border-radius:0 0 12px 12px'><h2>Thank you for your purchase</h2>
-      <p><b>Order:</b> {order_id}<br><b>Date:</b> {sale_date}<br><b>Customer:</b> {customer}<br><b>Payment:</b> {payment}</p>
-      <table style='width:100%;border-collapse:collapse'><thead><tr style='background:#f3f6fb'><th style='padding:10px;text-align:left'>Item</th><th>Qty</th><th style='text-align:right'>Unit price</th><th style='text-align:right'>Amount</th></tr></thead><tbody>{rows_html}</tbody></table>
-      <p style='text-align:right;font-size:20px;margin-top:22px'><b>Total: {total}</b></p>
-      <p style='color:#667085;font-size:12px'>This email was sent by SHOPIFLOW from {escape(cfg['sender_email'])}. Please keep it for your records.</p></div></body></html>"""
-    plain_lines = [
-        "SHOPIFLOW — Purchase invoice", f"Order: {order['order_id']}",
-        f"Date: {order.get('sale_date', '')}", f"Customer: {order.get('customer_name') or 'Walk-in Customer'}",
-        f"Payment: {order.get('payment_method', '')}", "", "Items:"
-    ]
-    for item in order["items"]:
-        plain_lines.append(
-            f"{item['product_name']} ({item['sku']}) x {item['quantity']} — "
-            f"{order['currency_symbol']}{item['line_total_display']:,.2f}"
-        )
-    plain_lines.extend(["", f"Total: {total}", "Thank you for shopping with SHOPIFLOW."])
-    message = EmailMessage()
-    message["Subject"] = f"SHOPIFLOW invoice {order['order_id']}"
-    message["From"] = f"SHOPIFLOW <{cfg['sender_email']}>"
-    message["To"] = to_email.strip()
-    message.set_content("\n".join(plain_lines))
-    message.add_alternative(html_body, subtype="html")
-    context = ssl.create_default_context()
-    with smtplib.SMTP(cfg["smtp_server"], cfg["smtp_port"], timeout=25) as server:
-        server.starttls(context=context)
-        server.login(cfg["sender_email"], cfg["app_password"].replace(" ", ""))
-        server.send_message(message)
-
 
 # ============================================================
 # DATABASE CONNECTION
@@ -591,7 +518,7 @@ try:
                             st.error(str(exc))
 
     # ========================================================
-    # POS & SALES — MULTI-ITEM CART + INVOICE EMAIL
+    # POS & SALES — MULTI-ITEM CART + INVOICE DISPLAY
     # ========================================================
     elif page == "POS & Sales":
         st.title("Point of sale")
@@ -762,7 +689,7 @@ try:
                         db.rollback()
                         st.error(f"Sale was not saved: {exc}")
 
-        # A completed order remains available for its invoice email after Streamlit reruns.
+        # A completed order remains available for invoice display after Streamlit reruns.
         last_order = st.session_state.get("shopiflow_last_order")
         if last_order:
             st.divider()
@@ -778,18 +705,6 @@ try:
             invoice_csv = invoice_df.to_csv(index=False).encode("utf-8-sig")
             st.download_button("Download invoice items (CSV)", invoice_csv,
                 f"{last_order['order_id']}_invoice.csv", "text/csv", key=f"download_invoice_{last_order['sale_id']}")
-            with st.form(f"email_invoice_form_{last_order['sale_id']}"):
-                recipient_email = st.text_input(
-                    "Email bill to", value=last_order.get("customer_email", ""),
-                    placeholder="customer@example.com"
-                )
-                send_clicked = st.form_submit_button("Send invoice email", type="primary", use_container_width=True)
-            if send_clicked:
-                try:
-                    send_invoice_email(recipient_email, last_order)
-                    st.success(f"Invoice {last_order['order_id']} emailed to {recipient_email.strip()}.")
-                except Exception as exc:
-                    st.error(f"The sale is saved, but the email could not be sent: {exc}")
             if st.button("Clear displayed invoice", key=f"clear_invoice_{last_order['sale_id']}"):
                 st.session_state.pop("shopiflow_last_order", None)
                 st.rerun()
