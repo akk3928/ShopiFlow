@@ -1,4 +1,9 @@
 from datetime import date, datetime, timedelta
+from email.message import EmailMessage
+from html import escape
+import os
+import smtplib
+import ssl
 
 import pandas as pd
 import plotly.express as px
@@ -267,6 +272,75 @@ def show_sales_charts(db):
                 title=f"Revenue Mix ({CURRENCY_CODE})", hole=.45), use_container_width=True)
 
 
+def get_email_settings():
+    """Read SMTP credentials from Streamlit Secrets or environment variables."""
+    settings = {}
+    try:
+        settings = dict(st.secrets.get("email", {}))
+    except Exception:
+        settings = {}
+    return {
+        "smtp_server": settings.get("smtp_server") or os.getenv("SMTP_SERVER", "smtp.gmail.com"),
+        "smtp_port": int(settings.get("smtp_port") or os.getenv("SMTP_PORT", "587")),
+        "sender_email": settings.get("sender_email") or os.getenv("SMTP_USER", "shopiflow.rgu@gmail.com"),
+        "app_password": settings.get("app_password") or os.getenv("SMTP_PASSWORD", ""),
+    }
+
+
+def send_invoice_email(to_email, order):
+    """Send a self-contained HTML receipt through the configured Gmail SMTP account."""
+    cfg = get_email_settings()
+    if not cfg["app_password"]:
+        raise RuntimeError(
+            "Email is not configured yet. Add the Gmail app password in Streamlit Cloud → Settings → Secrets."
+        )
+    if not to_email or "@" not in to_email or "." not in to_email.rsplit("@", 1)[-1]:
+        raise ValueError("Enter a valid customer email address.")
+
+    rows_html = "".join(
+        "<tr>"
+        f"<td style='padding:10px;border-bottom:1px solid #e5e7eb'>{escape(str(item['product_name']))}<br><small>SKU: {escape(str(item['sku']))}</small></td>"
+        f"<td style='padding:10px;text-align:center;border-bottom:1px solid #e5e7eb'>{int(item['quantity'])}</td>"
+        f"<td style='padding:10px;text-align:right;border-bottom:1px solid #e5e7eb'>{escape(order['currency_symbol'])}{float(item['unit_price_display']):,.2f}</td>"
+        f"<td style='padding:10px;text-align:right;border-bottom:1px solid #e5e7eb'>{escape(order['currency_symbol'])}{float(item['line_total_display']):,.2f}</td>"
+        "</tr>" for item in order["items"]
+    )
+    total = f"{order['currency_symbol']}{float(order['total_display']):,.2f}"
+    order_id = escape(str(order['order_id']))
+    customer = escape(str(order.get('customer_name') or 'Walk-in Customer'))
+    sale_date = escape(str(order.get('sale_date') or datetime.now().strftime('%Y-%m-%d %H:%M')))
+    payment = escape(str(order.get('payment_method') or ''))
+    html_body = f"""<!doctype html><html><body style='font-family:Arial,sans-serif;color:#202b3c;max-width:760px;margin:auto;padding:24px'>
+      <div style='background:#173b70;color:#fff;padding:22px;border-radius:12px 12px 0 0'><h1 style='margin:0;letter-spacing:2px'>SHOPIFLOW</h1><p style='margin:6px 0 0'>Retail purchase invoice</p></div>
+      <div style='border:1px solid #e5e7eb;padding:22px;border-radius:0 0 12px 12px'><h2>Thank you for your purchase</h2>
+      <p><b>Order:</b> {order_id}<br><b>Date:</b> {sale_date}<br><b>Customer:</b> {customer}<br><b>Payment:</b> {payment}</p>
+      <table style='width:100%;border-collapse:collapse'><thead><tr style='background:#f3f6fb'><th style='padding:10px;text-align:left'>Item</th><th>Qty</th><th style='text-align:right'>Unit price</th><th style='text-align:right'>Amount</th></tr></thead><tbody>{rows_html}</tbody></table>
+      <p style='text-align:right;font-size:20px;margin-top:22px'><b>Total: {total}</b></p>
+      <p style='color:#667085;font-size:12px'>This email was sent by SHOPIFLOW from {escape(cfg['sender_email'])}. Please keep it for your records.</p></div></body></html>"""
+    plain_lines = [
+        "SHOPIFLOW — Purchase invoice", f"Order: {order['order_id']}",
+        f"Date: {order.get('sale_date', '')}", f"Customer: {order.get('customer_name') or 'Walk-in Customer'}",
+        f"Payment: {order.get('payment_method', '')}", "", "Items:"
+    ]
+    for item in order["items"]:
+        plain_lines.append(
+            f"{item['product_name']} ({item['sku']}) x {item['quantity']} — "
+            f"{order['currency_symbol']}{item['line_total_display']:,.2f}"
+        )
+    plain_lines.extend(["", f"Total: {total}", "Thank you for shopping with SHOPIFLOW."])
+    message = EmailMessage()
+    message["Subject"] = f"SHOPIFLOW invoice {order['order_id']}"
+    message["From"] = f"SHOPIFLOW <{cfg['sender_email']}>"
+    message["To"] = to_email.strip()
+    message.set_content("\n".join(plain_lines))
+    message.add_alternative(html_body, subtype="html")
+    context = ssl.create_default_context()
+    with smtplib.SMTP(cfg["smtp_server"], cfg["smtp_port"], timeout=25) as server:
+        server.starttls(context=context)
+        server.login(cfg["sender_email"], cfg["app_password"].replace(" ", ""))
+        server.send_message(message)
+
+
 # ============================================================
 # DATABASE CONNECTION
 # ============================================================
@@ -517,51 +591,209 @@ try:
                             st.error(str(exc))
 
     # ========================================================
-    # POS & SALES
+    # POS & SALES — MULTI-ITEM CART + INVOICE EMAIL
     # ========================================================
     elif page == "POS & Sales":
         st.title("Point of sale")
-        st.caption("Create a sale, select a customer, and deduct inventory automatically.")
+        st.caption("Build one cart with multiple products, then complete one order and one bill.")
         products = ProductService.get_all_products(db)
         if not products:
             st.info("Add products and opening stock before recording sales.")
         else:
-            with st.form("pos_form"):
-                product_options = {f"{p.product_name} · {p.sku} — {money(p.price)}": p for p in products}
-                chosen = st.selectbox("Product", list(product_options))
-                product = product_options[chosen]
-                inv = InventoryService.get_inventory(db, product.product_id)
-                available = inv.quantity if inv else 0
-                st.caption(f"Available stock: {available}")
-                quantity = st.number_input("Quantity", min_value=1, max_value=max(1, available),
-                    value=1, step=1, disabled=(available == 0))
-                customer_type = st.radio("Customer type", ["Walk-in Customer", "Registered Customer"], horizontal=True)
+            if "shopiflow_cart" not in st.session_state:
+                st.session_state["shopiflow_cart"] = {}
+            cart = st.session_state["shopiflow_cart"]
+            active_products = {p.product_id: p for p in products}
+
+            st.subheader("1. Add items")
+            product_options = {
+                f"{p.product_name} · {p.sku} — {money(p.price)}": p.product_id
+                for p in products
+            }
+            add_col1, add_col2, add_col3 = st.columns([3, 1, 1])
+            with add_col1:
+                selected_label = st.selectbox("Product", list(product_options), key="pos_add_product")
+            selected_pid = product_options[selected_label]
+            selected_product = active_products[selected_pid]
+            selected_inventory = InventoryService.get_inventory(db, selected_pid)
+            selected_stock = int(selected_inventory.quantity if selected_inventory else 0)
+            with add_col2:
+                add_qty = st.number_input(
+                    "Quantity", min_value=1, max_value=max(1, selected_stock), value=1,
+                    step=1, key="pos_add_quantity", disabled=(selected_stock <= 0)
+                )
+            with add_col3:
+                st.write("")
+                st.write("")
+                add_clicked = st.button("Add to bill", type="primary", use_container_width=True,
+                    disabled=(selected_stock <= 0), key="pos_add_to_cart")
+            st.caption(f"Available stock for {selected_product.product_name}: {selected_stock}")
+            if add_clicked:
+                existing_qty = int(cart.get(selected_pid, {}).get("quantity", 0))
+                if existing_qty + int(add_qty) > selected_stock:
+                    st.error(f"Only {selected_stock} unit(s) are in stock; the cart already contains {existing_qty}.")
+                else:
+                    cart[selected_pid] = {
+                        "product_id": selected_pid,
+                        "product_name": selected_product.product_name,
+                        "sku": selected_product.sku,
+                        "unit_price_inr": float(selected_product.price or 0),
+                        "quantity": existing_qty + int(add_qty),
+                    }
+                    st.session_state["shopiflow_cart"] = cart
+                    st.rerun()
+
+            st.divider()
+            st.subheader("2. Current bill")
+            if not cart:
+                st.info("Your bill is empty. Add two or more products to make a multi-item order.")
+            else:
+                cart_total_inr = 0.0
+                for pid in list(cart.keys()):
+                    item = cart[pid]
+                    product = active_products.get(pid)
+                    if product is None:
+                        cart.pop(pid, None)
+                        continue
+                    inv = InventoryService.get_inventory(db, pid)
+                    available = int(inv.quantity if inv else 0)
+                    # Refresh name/price from the database so the checkout uses current product data.
+                    item["product_name"] = product.product_name
+                    item["sku"] = product.sku
+                    item["unit_price_inr"] = float(product.price or 0)
+                    max_qty = max(1, available)
+                    item_cols = st.columns([3, 1.2, 1.4, 1.4, 0.8])
+                    item_cols[0].markdown(f"**{product.product_name}**  ")
+                    item_cols[0].caption(f"SKU: {product.sku} · In stock: {available}")
+                    item_cols[1].write(f"Price: {money(item['unit_price_inr'])}")
+                    qty_now = st.number_input(
+                        "Qty", min_value=1, max_value=max_qty,
+                        value=min(max(1, int(item["quantity"])), max_qty), step=1,
+                        key=f"pos_cart_qty_{pid}", disabled=(available <= 0)
+                    )
+                    item["quantity"] = int(qty_now)
+                    line_total = item["unit_price_inr"] * item["quantity"]
+                    cart_total_inr += line_total
+                    item_cols[3].markdown(f"**{money(line_total)}**")
+                    if item_cols[4].button("Remove", key=f"pos_remove_{pid}"):
+                        cart.pop(pid, None)
+                        st.session_state["shopiflow_cart"] = cart
+                        st.rerun()
+                    if int(item["quantity"]) > available:
+                        st.error(f"{product.product_name}: quantity exceeds available stock.")
+                st.session_state["shopiflow_cart"] = cart
+                st.markdown(f"### Bill total: {money(cart_total_inr)}")
+                st.caption(f"Prices are stored in INR; this bill is displayed in {CURRENCY_CODE}.")
+
+                st.divider()
+                st.subheader("3. Customer and checkout")
+                customer_type = st.radio(
+                    "Customer type", ["Walk-in Customer", "Registered Customer"],
+                    horizontal=True, key="pos_customer_type"
+                )
                 customer_id = None
-                checkout_disabled = available == 0
+                customer_name = "Walk-in Customer"
+                customer_email = ""
+                checkout_disabled = not cart
                 if customer_type == "Registered Customer":
                     customer_rows = db.query(Customer).order_by(Customer.customer_name).all()
                     if not customer_rows:
-                        st.warning("Register a customer first.")
+                        st.warning("Register a customer first, or choose Walk-in Customer.")
                         checkout_disabled = True
                     else:
-                        customer_options = {f"{c.customer_name} (ID: {c.customer_id})": c.customer_id for c in customer_rows}
-                        selected_customer = st.selectbox("Select customer", list(customer_options))
-                        customer_id = customer_options[selected_customer]
-                else:
-                    st.info("Walk-in customer — no customer ID required.")
-                payment = st.selectbox("Payment method", ["Cash", "UPI", "Card", "Bank Transfer", "Other"])
-                st.write(f"**Bill total ({CURRENCY_CODE}): {money(float(product.price or 0) * quantity)}**")
-                checkout = st.form_submit_button("Complete sale", type="primary",
-                    use_container_width=True, disabled=checkout_disabled)
-            if checkout:
+                        customer_options = {
+                            f"{c.customer_name} (ID: {c.customer_id})": c for c in customer_rows
+                        }
+                        selected_customer_label = st.selectbox("Select customer", list(customer_options), key="pos_registered_customer")
+                        selected_customer = customer_options[selected_customer_label]
+                        customer_id = selected_customer.customer_id
+                        customer_name = selected_customer.customer_name
+                        customer_email = selected_customer.email or ""
+                payment = st.selectbox(
+                    "Payment method", ["Cash", "UPI", "Card", "Bank Transfer", "Other"], key="pos_payment_method"
+                )
+                st.info("All cart items will be saved under one order ID. Stock is deducted only when the sale succeeds.")
+                checkout = st.button(
+                    "Complete sale and generate bill", type="primary", use_container_width=True,
+                    disabled=checkout_disabled, key="pos_checkout"
+                )
+                if checkout:
+                    try:
+                        line_items = []
+                        validation_errors = []
+                        for pid, item in cart.items():
+                            inv = InventoryService.get_inventory(db, pid)
+                            available = int(inv.quantity if inv else 0)
+                            quantity = int(item["quantity"])
+                            if quantity < 1 or quantity > available:
+                                validation_errors.append(f"{item['product_name']}: requested {quantity}, available {available}.")
+                            line_items.append({"product_id": int(pid), "quantity": quantity})
+                        if validation_errors:
+                            st.error("Please correct the cart before checkout: " + " ".join(validation_errors))
+                        elif not line_items:
+                            st.error("Add at least one item before checkout.")
+                        else:
+                            sale = SalesService.create_sale(db, customer_id, line_items, payment)
+                            order_items = []
+                            for pid, item in cart.items():
+                                q = int(item["quantity"])
+                                unit_inr = float(item["unit_price_inr"])
+                                order_items.append({
+                                    "product_id": int(pid), "product_name": item["product_name"],
+                                    "sku": item["sku"], "quantity": q,
+                                    "unit_price_display": convert_from_inr(unit_inr),
+                                    "line_total_display": convert_from_inr(unit_inr * q),
+                                })
+                            order = {
+                                "order_id": f"ORD-{sale.sale_id:06d}",
+                                "sale_id": int(sale.sale_id),
+                                "sale_date": str(sale.sale_date or datetime.now()).replace("T", " ")[:19],
+                                "customer_id": customer_id, "customer_name": customer_name,
+                                "customer_email": customer_email, "payment_method": payment,
+                                "total_display": convert_from_inr(float(sale.total_amount or 0)),
+                                "currency_code": CURRENCY_CODE, "currency_symbol": CURRENCY_SYMBOL,
+                                "items": order_items,
+                            }
+                            st.session_state["shopiflow_last_order"] = order
+                            st.session_state["shopiflow_cart"] = {}
+                            st.success(f"{order['order_id']} completed successfully. Total: {money(sale.total_amount)}")
+                            st.rerun()
+                    except Exception as exc:
+                        db.rollback()
+                        st.error(f"Sale was not saved: {exc}")
+
+        # A completed order remains available for its invoice email after Streamlit reruns.
+        last_order = st.session_state.get("shopiflow_last_order")
+        if last_order:
+            st.divider()
+            st.subheader(f"Invoice — {last_order['order_id']}")
+            st.write(f"**Customer:** {last_order.get('customer_name') or 'Walk-in Customer'}  ·  **Payment:** {last_order.get('payment_method', '')}")
+            invoice_df = pd.DataFrame([{
+                "Product": item["product_name"], "SKU": item["sku"], "Quantity": item["quantity"],
+                f"Unit price ({last_order['currency_code']})": item["unit_price_display"],
+                f"Line total ({last_order['currency_code']})": item["line_total_display"],
+            } for item in last_order["items"]])
+            st.dataframe(invoice_df, use_container_width=True, hide_index=True)
+            st.markdown(f"### Total: {last_order['currency_symbol']}{last_order['total_display']:,.2f}")
+            invoice_csv = invoice_df.to_csv(index=False).encode("utf-8-sig")
+            st.download_button("Download invoice items (CSV)", invoice_csv,
+                f"{last_order['order_id']}_invoice.csv", "text/csv", key=f"download_invoice_{last_order['sale_id']}")
+            with st.form(f"email_invoice_form_{last_order['sale_id']}"):
+                recipient_email = st.text_input(
+                    "Email bill to", value=last_order.get("customer_email", ""),
+                    placeholder="customer@example.com"
+                )
+                send_clicked = st.form_submit_button("Send invoice email", type="primary", use_container_width=True)
+            if send_clicked:
                 try:
-                    sale = SalesService.create_sale(db, customer_id,
-                        [{"product_id": product.product_id, "quantity": int(quantity)}], payment)
-                    st.success(f"Order ORD-{sale.sale_id:06d} completed · Total {money(sale.total_amount)} {CURRENCY_CODE}")
-                    st.rerun()
+                    send_invoice_email(recipient_email, last_order)
+                    st.success(f"Invoice {last_order['order_id']} emailed to {recipient_email.strip()}.")
                 except Exception as exc:
-                    db.rollback()
-                    st.error(f"Sale was not saved: {exc}")
+                    st.error(f"The sale is saved, but the email could not be sent: {exc}")
+            if st.button("Clear displayed invoice", key=f"clear_invoice_{last_order['sale_id']}"):
+                st.session_state.pop("shopiflow_last_order", None)
+                st.rerun()
+
         st.divider()
         st.subheader("Recent transactions")
         df = sales_frame(db)
