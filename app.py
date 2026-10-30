@@ -20,7 +20,7 @@ from auth import require_login, logout
 
 
 # ============================================================
-# PAGE CONFIGURATION + PROFESSIONAL UI
+# PAGE CONFIGURATION
 # ============================================================
 st.set_page_config(
     page_title="ShopiFlow | Retail Intelligence",
@@ -29,7 +29,7 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Streamlit's active theme variables keep controls readable in both light and dark mode.
+
 BASE_THEME = (st.get_option("theme.base") or "light").lower()
 PLOTLY_TEMPLATE = "plotly_dark" if BASE_THEME == "dark" else "plotly_white"
 
@@ -117,7 +117,7 @@ def require_role(*allowed_roles):
 # ============================================================
 CURRENCY_OPTIONS = {
     "INR — Indian Rupee (₹)": {"code": "INR", "symbol": "₹", "inr_per_unit": 1.0},
-    "USD — US Dollar ($)": {"code": "USD", "symbol": "$", "inr_per_unit": 85.5},
+    "USD — US Dollar ($)": {"code": "USD", "symbol": "$", "inr_per_unit": 95},
     "EUR — Euro (€)": {"code": "EUR", "symbol": "€", "inr_per_unit": 99.5},
 }
 
@@ -518,7 +518,7 @@ try:
                             st.error(str(exc))
 
     # ========================================================
-    # POS & SALES — MULTI-ITEM CART + INVOICE DISPLAY
+    # POS & SALES + INVOICE DISPLAY
     # ========================================================
     elif page == "POS & Sales":
         st.title("Point of sale")
